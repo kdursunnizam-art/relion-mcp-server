@@ -113,8 +113,9 @@ export RELION_PROJECT_DIR=/data/my_project
 python relion_mcp.py --transport http --port 8000 --host 0.0.0.0
 ```
 
-Configure openclaw.json
+Configure openclaw.json:
 
+```
 "skills": {
   "install": {
     "nodeManager": "npm"
