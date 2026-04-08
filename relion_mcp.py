@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-RELION MCP Server v2.0 — Complete rewrite for RELION 5.0.1
+RELION MCP Server v2.1 — Complete rewrite for RELION 5.0.1
 
 Features:
   - Preview/Confirm mode: every pipeline tool shows all params before launch
+  - Async background execution: long jobs return immediately with PID
   - Full parameter coverage per RELION 5 tutorial (EMPIAR-10204)
-  - 4 new tools: InitialModel, MaskCreate, CTFRefine, BayesianPolishing
-  - 19 tools total (5 read-only + 14 pipeline)
+  - relion_help: live --help parsing for any RELION binary
+  - 21 tools total (7 read-only + 14 pipeline)
 
 Compatible with Claude Code (stdio), Claude Cowork, OpenClaw/NemoClaw (HTTP).
 
@@ -132,9 +133,92 @@ def _run_sync(
 async def _run(
     cmd: List[str], cwd: Optional[str] = None, timeout: int = 600
 ) -> dict:
-    """Run subprocess in thread pool (non-blocking)."""
+    """Run subprocess in thread pool (non-blocking). For short jobs only."""
     return await asyncio.get_running_loop().run_in_executor(
         None, _run_sync, cmd, cwd, timeout
+    )
+
+
+def _run_background(
+    cmd: List[str], job_dir: str, cwd: Optional[str] = None
+) -> dict:
+    """Launch a RELION job as a detached background process.
+
+    stdout/stderr are redirected to files inside job_dir.
+    Returns immediately with the PID — does NOT wait for completion.
+    The wrapper script writes RELION_JOB_EXIT_SUCCESS or _FAILURE
+    on completion so that relion_job_status can track it.
+    """
+    os.makedirs(job_dir, exist_ok=True)
+    stdout_path = os.path.join(job_dir, "run.out")
+    stderr_path = os.path.join(job_dir, "run.err")
+    cmd_path = os.path.join(job_dir, "run.cmd")
+
+    # Save the command for reference
+    cmd_str = " ".join(cmd)
+    with open(cmd_path, "w") as f:
+        f.write(cmd_str + "\n")
+
+    # Build a tiny wrapper shell script that:
+    # 1. Runs the RELION command
+    # 2. Creates SUCCESS or FAILURE marker based on exit code
+    wrapper_path = os.path.join(job_dir, "run.sh")
+    with open(wrapper_path, "w") as f:
+        f.write("#!/bin/bash\n")
+        f.write(f"{cmd_str} > {stdout_path} 2> {stderr_path}\n")
+        f.write("EXIT_CODE=$?\n")
+        f.write(f"if [ $EXIT_CODE -eq 0 ]; then\n")
+        f.write(f"  touch {os.path.join(job_dir, 'RELION_JOB_EXIT_SUCCESS')}\n")
+        f.write(f"else\n")
+        f.write(f"  touch {os.path.join(job_dir, 'RELION_JOB_EXIT_FAILURE')}\n")
+        f.write(f"fi\n")
+        f.write(f"exit $EXIT_CODE\n")
+    os.chmod(wrapper_path, 0o755)
+
+    # Launch detached (won't block the MCP server)
+    try:
+        proc = subprocess.Popen(
+            ["bash", wrapper_path],
+            cwd=cwd or PROJECT_DIR,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,  # fully detach from parent
+        )
+        return {
+            "pid": proc.pid,
+            "command": cmd_str,
+            "job_dir": job_dir,
+            "stdout_log": stdout_path,
+            "stderr_log": stderr_path,
+        }
+    except FileNotFoundError:
+        return {
+            "pid": -1,
+            "command": cmd_str,
+            "job_dir": job_dir,
+            "error": f"Binary not found: {cmd[0]}",
+        }
+
+
+def _format_launched(name: str, info: dict) -> str:
+    """Format the result of a background job launch."""
+    if info.get("pid", -1) < 0:
+        return (
+            f"## {name}\n"
+            f"**Status:** ❌ Failed to launch\n"
+            f"**Error:** {info.get('error', 'Unknown')}\n"
+            f"**Command:** `{info.get('command', '')}`"
+        )
+    return (
+        f"## {name}\n"
+        f"**Status:** 🚀 Launched (background)\n"
+        f"**Job:** `{info['job_dir']}`\n"
+        f"**PID:** `{info['pid']}`\n"
+        f"**Command:** `{info['command']}`\n\n"
+        f"📋 Le job tourne en arrière-plan. Utilisez :\n"
+        f"  - `relion_job_status(job_dir=\"{info['job_dir']}\")` pour vérifier l'avancement\n"
+        f"  - `relion_job_logs(job_dir=\"{info['job_dir']}\")` pour lire stdout/stderr\n"
+        f"  - Les fichiers SUCCESS/FAILURE seront créés automatiquement à la fin."
     )
 
 
@@ -363,8 +447,28 @@ async def relion_read_star(params: ReadStarInput) -> str:
 
 
 # =====================================================================
-# READ-ONLY TOOL 3 — Job Status
+# READ-ONLY TOOL 3 — Job Status (enhanced: PID check + logs)
 # =====================================================================
+
+
+def _check_pid_alive(job_dir: str) -> Optional[int]:
+    """Check if the background process for a job is still running.
+    Returns the PID if alive, None otherwise."""
+    run_sh = Path(_resolve(job_dir)) / "run.sh"
+    if not run_sh.exists():
+        return None
+    try:
+        # Find bash process running this script
+        result = subprocess.run(
+            ["pgrep", "-f", str(run_sh)],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            pid = int(result.stdout.strip().splitlines()[0])
+            return pid
+    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
+        pass
+    return None
 
 
 class JobStatusInput(BaseModel):
@@ -380,18 +484,103 @@ class JobStatusInput(BaseModel):
     },
 )
 async def relion_job_status(params: JobStatusInput) -> str:
-    """Check execution status of a RELION job."""
+    """Check execution status of a RELION job.
+    Detects SUCCESS/FAILURE markers, checks if process is still running,
+    and lists output files."""
     jd = Path(_resolve(params.job_dir))
     status = _job_status(params.job_dir)
+
+    # If status is RUNNING_OR_IDLE, try to check if PID is alive
+    pid_info = ""
+    if status == "RUNNING_OR_IDLE":
+        pid = _check_pid_alive(params.job_dir)
+        if pid:
+            status = "🔄 RUNNING"
+            pid_info = f"\n**PID:** `{pid}` (process alive)"
+        else:
+            # No marker files and no process → probably crashed
+            status = "⚠️ IDLE (no process found — may have crashed)"
+
     files: List[str] = []
     if jd.exists():
         for f in sorted(jd.iterdir()):
-            if f.suffix in (".star", ".mrc", ".mrcs", ".log"):
-                files.append(f"  - `{f.name}` ({f.stat().st_size / 1e6:.1f} MB)")
+            if f.suffix in (".star", ".mrc", ".mrcs", ".log", ".out", ".err"):
+                size = f.stat().st_size
+                size_str = f"{size / 1e6:.1f} MB" if size > 1e6 else f"{size / 1e3:.1f} KB"
+                files.append(f"  - `{f.name}` ({size_str})")
+
+    # Show tail of stderr if job failed or is idle
+    err_tail = ""
+    err_file = jd / "run.err"
+    if err_file.exists() and err_file.stat().st_size > 0:
+        with open(err_file) as ef:
+            content = ef.read()
+            tail = content[-1000:] if len(content) > 1000 else content
+            if tail.strip():
+                err_tail = f"\n**stderr (tail):**\n```\n{tail.strip()}\n```"
+
     return (
-        f"## `{params.job_dir}`\n**Status:** {status}\n"
+        f"## `{params.job_dir}`\n**Status:** {status}{pid_info}\n"
         + ("\n".join(files) if files else "_No output files._")
+        + err_tail
     )
+
+
+# =====================================================================
+# READ-ONLY TOOL 3b — Job Logs
+# =====================================================================
+
+
+class JobLogsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_dir: str = Field(..., description="Job directory, e.g. 'MotionCorr/job001'")
+    stream: str = Field(
+        default="both",
+        description="Which log: 'stdout', 'stderr', or 'both'",
+    )
+    tail: int = Field(
+        default=100,
+        description="Number of last lines to show",
+        ge=1, le=500,
+    )
+
+
+@mcp.tool(
+    name="relion_job_logs",
+    annotations={
+        "readOnlyHint": True, "destructiveHint": False,
+        "idempotentHint": True, "openWorldHint": False,
+    },
+)
+async def relion_job_logs(params: JobLogsInput) -> str:
+    """Read stdout and/or stderr logs from a RELION background job.
+    Use this to monitor a running job or diagnose a failed one."""
+    jd = Path(_resolve(params.job_dir))
+    if not jd.exists():
+        return f"❌ Job directory not found: `{params.job_dir}`"
+
+    lines = [f"## Logs — `{params.job_dir}`", ""]
+
+    for stream_name, filename in [("stdout", "run.out"), ("stderr", "run.err")]:
+        if params.stream not in ("both", stream_name):
+            continue
+        log_file = jd / filename
+        if not log_file.exists():
+            lines.append(f"### {stream_name}\n_File `{filename}` not found._\n")
+            continue
+        size = log_file.stat().st_size
+        with open(log_file) as f:
+            content = f.read()
+        # Get tail
+        content_lines = content.splitlines()
+        tail_lines = content_lines[-params.tail:]
+        truncated = len(content_lines) > params.tail
+        lines.append(f"### {stream_name} ({size / 1e3:.1f} KB, {len(content_lines)} lines)")
+        if truncated:
+            lines.append(f"_(showing last {params.tail} lines)_")
+        lines.append(f"```\n{chr(10).join(tail_lines)}\n```\n")
+
+    return "\n".join(lines)
 
 
 # =====================================================================
@@ -487,6 +676,209 @@ async def relion_run_command(params: RunCommandInput) -> str:
     if result["returncode"] == 0:
         _mark_success(job_dir)
     return _format_result(params.program, job_dir, result)
+
+
+# =====================================================================
+# READ-ONLY TOOL 6 — RELION Help / Flag Discovery
+# =====================================================================
+
+
+def _parse_help_output(raw: str) -> Dict[str, Any]:
+    """Parse the raw output of `relion_* --help` into structured sections.
+
+    Returns a dict with:
+      - program: str
+      - sections: list of {name, options: list of {flag, description, default}}
+      - raw_truncated: str (last 500 chars if very long)
+    """
+    sections: List[Dict[str, Any]] = []
+    current_section: str = "General"
+    current_options: List[Dict[str, str]] = []
+
+    # RELION help uses "=== Section Name ===" or "Section:" headers
+    section_re = re.compile(r"^=+\s*(.+?)\s*=+$")
+    # Options typically look like:
+    #   --flag_name       Description text  [default]
+    #   --flag_name       Description text  (default value)
+    # or boolean flags without default
+    option_re = re.compile(
+        r"^\s*(--\S+)\s+(.+?)(?:\s+\[([^\]]*)\]|\s+\(([^)]*)\))?\s*$"
+    )
+    # Simpler fallback: just --flag and description
+    option_simple_re = re.compile(r"^\s*(--\S+)\s+(.+)$")
+
+    for line in raw.splitlines():
+        line_stripped = line.rstrip()
+        # Check for section header
+        m_sec = section_re.match(line_stripped)
+        if m_sec:
+            # Save previous section
+            if current_options:
+                sections.append({"name": current_section, "options": current_options})
+                current_options = []
+            current_section = m_sec.group(1).strip()
+            continue
+
+        # Also detect "Section:" style headers (some binaries use this)
+        if (
+            line_stripped.endswith(":")
+            and not line_stripped.startswith("-")
+            and len(line_stripped) < 80
+            and not line_stripped.startswith(" ")
+        ):
+            if current_options:
+                sections.append({"name": current_section, "options": current_options})
+                current_options = []
+            current_section = line_stripped.rstrip(":")
+            continue
+
+        # Try to parse an option line
+        m_opt = option_re.match(line_stripped)
+        if m_opt:
+            default_val = m_opt.group(3) if m_opt.group(3) is not None else m_opt.group(4)
+            current_options.append({
+                "flag": m_opt.group(1),
+                "description": m_opt.group(2).strip(),
+                "default": default_val if default_val else "",
+            })
+            continue
+
+        m_simple = option_simple_re.match(line_stripped)
+        if m_simple:
+            current_options.append({
+                "flag": m_simple.group(1),
+                "description": m_simple.group(2).strip(),
+                "default": "",
+            })
+
+    # Flush last section
+    if current_options:
+        sections.append({"name": current_section, "options": current_options})
+
+    return {
+        "sections": sections,
+        "total_flags": sum(len(s["options"]) for s in sections),
+        "raw_truncated": raw[-500:] if len(raw) > 500 else raw,
+    }
+
+
+class HelpInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    program: str = Field(
+        ...,
+        description=(
+            "RELION binary name, e.g. 'relion_refine', 'relion_autopick', "
+            "'relion_postprocess', 'relion_mask_create', 'relion_run_motioncorr', "
+            "'relion_run_ctffind', 'relion_preprocess', 'relion_ctf_refine', "
+            "'relion_motion_refine', 'relion_import'. "
+            "Must start with 'relion'."
+        ),
+    )
+    search: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional keyword to filter results. Only flags/descriptions "
+            "containing this string (case-insensitive) will be shown. "
+            "E.g. 'ctf', 'mask', 'gpu', 'healpix'."
+        ),
+    )
+    response_format: Fmt = Field(default=Fmt.MARKDOWN)
+
+    @field_validator("program")
+    @classmethod
+    def validate_program(cls, v: str) -> str:
+        if not v.startswith("relion"):
+            raise ValueError("Program must start with 'relion'")
+        if any(c in v for c in ";|&`$(){}[]"):
+            raise ValueError("Invalid characters in program name")
+        return v
+
+
+@mcp.tool(
+    name="relion_help",
+    annotations={
+        "readOnlyHint": True, "destructiveHint": False,
+        "idempotentHint": True, "openWorldHint": False,
+    },
+)
+async def relion_help(params: HelpInput) -> str:
+    """Run `relion_<program> --help` and return ALL accepted flags with
+    descriptions and defaults — parsed and structured.
+
+    Use this to discover every flag a RELION binary accepts in real time,
+    verify flag names, check defaults, or find options not exposed by
+    the other MCP tools.
+
+    Optionally filter with `search` to show only matching flags.
+
+    Examples:
+      relion_help(program="relion_refine")
+      relion_help(program="relion_refine", search="ctf")
+      relion_help(program="relion_mask_create")
+      relion_help(program="relion_run_motioncorr", search="gain")
+    """
+    cmd = [_cmd(params.program), "--help"]
+    result = await _run(cmd, timeout=30)
+
+    # RELION prints help to stderr (sometimes stdout), merge both
+    raw = (result.get("stdout", "") + "\n" + result.get("stderr", "")).strip()
+
+    if not raw:
+        return (
+            f"❌ No output from `{params.program} --help`.\n"
+            f"Binary may not exist or is not in PATH.\n"
+            f"**Command:** `{result.get('command', '')}`"
+        )
+
+    parsed = _parse_help_output(raw)
+
+    # Apply search filter if given
+    if params.search:
+        needle = params.search.lower()
+        filtered_sections: List[Dict[str, Any]] = []
+        for sec in parsed["sections"]:
+            matched = [
+                opt for opt in sec["options"]
+                if needle in opt["flag"].lower()
+                or needle in opt["description"].lower()
+                or needle in opt.get("default", "").lower()
+            ]
+            if matched:
+                filtered_sections.append({"name": sec["name"], "options": matched})
+        parsed["sections"] = filtered_sections
+        parsed["total_flags"] = sum(len(s["options"]) for s in filtered_sections)
+
+    # Format output
+    if params.response_format == Fmt.JSON:
+        return json.dumps({
+            "program": params.program,
+            "search": params.search,
+            **parsed,
+        }, indent=2)
+
+    # Markdown output
+    lines = [
+        f"## `{params.program} --help`",
+        f"**Total flags found:** {parsed['total_flags']}",
+    ]
+    if params.search:
+        lines.append(f"**Filter:** `{params.search}`")
+    lines.append("")
+
+    if not parsed["sections"]:
+        lines.append("_No flags matched the filter._\n")
+        lines.append("**Raw output (last 500 chars):**")
+        lines.append(f"```\n{parsed['raw_truncated']}\n```")
+        return "\n".join(lines)
+
+    for sec in parsed["sections"]:
+        lines.append(f"### {sec['name']}")
+        for opt in sec["options"]:
+            default_str = f" `[{opt['default']}]`" if opt["default"] else ""
+            lines.append(f"  `{opt['flag']}` — {opt['description']}{default_str}")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 # =====================================================================
@@ -655,10 +1047,8 @@ async def relion_motioncorr(params: MotionCorrInput) -> str:
         cmd.append("--save_ps")
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=86400)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    return _format_result("Motion Correction", job_dir, result)
+    info = _run_background(cmd, job_dir)
+    return _format_launched("Motion Correction", info)
 
 
 # =====================================================================
@@ -745,10 +1135,8 @@ async def relion_ctffind(params: CtfFindInput) -> str:
         cmd.append("--fast_search")
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=86400)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    return _format_result("CTF Estimation", job_dir, result)
+    info = _run_background(cmd, job_dir)
+    return _format_launched("CTF Estimation", info)
 
 
 # =====================================================================
@@ -832,10 +1220,8 @@ async def relion_autopick(params: AutoPickInput) -> str:
             cmd += ["--lowpass", str(params.lowpass)]
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=86400)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    return _format_result("Auto-Picking", job_dir, result)
+    info = _run_background(cmd, job_dir)
+    return _format_launched("Auto-Picking", info)
 
 
 # =====================================================================
@@ -916,10 +1302,8 @@ async def relion_extract(params: ExtractInput) -> str:
         cmd.append("--float16")
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=86400)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    return _format_result("Particle Extraction", job_dir, result)
+    info = _run_background(cmd, job_dir)
+    return _format_launched("Particle Extraction", info)
 
 
 # =====================================================================
@@ -993,10 +1377,8 @@ async def relion_class2d(params: Class2DInput) -> str:
         cmd.append("--center_classes")
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=86400 * 3)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    return _format_result("2D Classification", job_dir, result)
+    info = _run_background(cmd, job_dir)
+    return _format_launched("2D Classification", info)
 
 
 # =====================================================================
@@ -1067,10 +1449,8 @@ async def relion_initial_model(params: InitialModelInput) -> str:
         cmd.append("--flatten_solvent")
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=86400 * 3)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    return _format_result("Initial Model (VDAM)", job_dir, result)
+    info = _run_background(cmd, job_dir)
+    return _format_launched("Initial Model (VDAM)", info)
 
 
 # =====================================================================
@@ -1154,10 +1534,8 @@ async def relion_class3d(params: Class3DInput) -> str:
         cmd.append("--skip_gridding")
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=86400 * 7)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    return _format_result("3D Classification", job_dir, result)
+    info = _run_background(cmd, job_dir)
+    return _format_launched("3D Classification", info)
 
 
 # =====================================================================
@@ -1246,10 +1624,8 @@ async def relion_refine3d(params: Refine3DInput) -> str:
         cmd += ["--solvent_mask", _resolve(params.solvent_mask)]
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=86400 * 7)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    return _format_result("3D Refinement", job_dir, result)
+    info = _run_background(cmd, job_dir)
+    return _format_launched("3D Refinement", info)
 
 
 # =====================================================================
@@ -1308,10 +1684,8 @@ async def relion_mask_create(params: MaskCreateInput) -> str:
         cmd += ["--angpix", str(params.angpix)]
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=3600)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    return _format_result("Mask Creation", job_dir, result)
+    info = _run_background(cmd, job_dir)
+    return _format_launched("Mask Creation", info)
 
 
 # =====================================================================
@@ -1388,18 +1762,11 @@ async def relion_postprocess(params: PostProcessInput) -> str:
         cmd.append("--skip_fsc_weighting")
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=3600)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    # Extract resolution from output
-    resolution = ""
-    fsc_file = os.path.join(job_dir, "postprocess.star")
-    if os.path.isfile(fsc_file):
-        with open(fsc_file) as f:
-            m = re.search(r"_rlnFinalResolution\s+(\d+\.?\d*)", f.read())
-            if m:
-                resolution = f"\n\n**Final Resolution: {m.group(1)} Å**"
-    return _format_result("Post-Processing", job_dir, result) + resolution
+    info = _run_background(cmd, job_dir)
+    return _format_launched("Post-Processing", info) + (
+        "\n\n💡 Une fois le job terminé, la résolution finale sera dans "
+        f"`{job_dir}/postprocess.star` (champ `_rlnFinalResolution`)."
+    )
 
 
 # =====================================================================
@@ -1473,10 +1840,8 @@ async def relion_ctf_refine(params: CtfRefineInput) -> str:
         cmd.append("--do_4thorder")
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=86400 * 3)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    return _format_result("CTF Refinement", job_dir, result)
+    info = _run_background(cmd, job_dir)
+    return _format_launched("CTF Refinement", info)
 
 
 # =====================================================================
@@ -1533,10 +1898,8 @@ async def relion_bayesian_polishing(params: BayesianPolishingInput) -> str:
     ]
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=86400 * 3)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    return _format_result("Bayesian Polishing", job_dir, result)
+    info = _run_background(cmd, job_dir)
+    return _format_launched("Bayesian Polishing", info)
 
 
 # =====================================================================
@@ -1584,10 +1947,8 @@ async def relion_blush(params: BlushInput) -> str:
         cmd += ["--mask", _resolve(params.mask)]
     if params.extra_args:
         cmd += params.extra_args
-    result = await _run(cmd, timeout=7200)
-    if result["returncode"] == 0:
-        _mark_success(job_dir)
-    return _format_result("Blush (AI Denoising)", job_dir, result)
+    info = _run_background(cmd, job_dir)
+    return _format_launched("Blush (AI Denoising)", info)
 
 
 # ---------------------------------------------------------------------------

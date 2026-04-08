@@ -1,6 +1,6 @@
-# RELION MCP Server v2.0
+# RELION MCP Server v2.1
 
-An MCP (Model Context Protocol) server that lets AI agents drive [RELION 5.x](https://github.com/3dem/relion) the gold-standard software for cryo-EM structure determination.
+An MCP (Model Context Protocol) server that lets AI agents drive [RELION 5.x](https://github.com/3dem/relion) — the gold-standard software for cryo-EM structure determination.
 
 > **Tested and verified** against RELION 5.0.1 on Ubuntu 24.04 (WSL2). All CLI flags validated against actual `--help` output.
 
@@ -12,14 +12,19 @@ An AI agent (Claude Code, OpenClaw, NemoClaw, etc.) can process cryo-EM data thr
 You: "Import the movies from Movies/*.tiff, 200 kV, pixel size 0.885 Å, then run motion correction"
 Agent: → relion_import(..., confirm=False)  → shows parameter preview
 You: "Looks good, launch it"
-Agent: → relion_import(..., confirm=True)   → job runs
+Agent: → relion_import(..., confirm=True)   → job runs (instant)
        → relion_motioncorr(..., confirm=False) → preview
-       ...
+You: "Ok go"
+Agent: → relion_motioncorr(..., confirm=True) → 🚀 Launched (PID 12345)
+       → relion_job_status("MotionCorr/job001") → 🔄 RUNNING
+       → relion_job_status("MotionCorr/job001") → ✅ COMPLETED
 ```
 
-The server exposes **19 tools** covering the complete single-particle analysis pipeline, from import to Bayesian polishing.
+The server exposes **21 tools** covering the complete single-particle analysis pipeline, from import to Bayesian polishing.
 
-## Key Feature: Preview Before Launch
+## Key Features
+
+### 1. Preview Before Launch
 
 Every pipeline tool uses a **preview/confirm** system to prevent costly mistakes:
 
@@ -28,9 +33,22 @@ Every pipeline tool uses a **preview/confirm** system to prevent costly mistakes
   - 📋 **tutorial** — RELION 5 tutorial default (EMPIAR-10204, beta-galactosidase)
   - ❌ **requis** — required parameter still missing
   - ⬜ **optionnel** — optional, not set
-- **`confirm=True`** — the tool executes the job with all parameters
+- **`confirm=True`** — the tool launches the job in background
 
-This gives the user (or the supervising human) a chance to review every parameter before committing hours of compute.
+### 2. Non-Blocking Background Execution
+
+All long-running jobs (MotionCorr, CTF, Class2D, Refine3D, etc.) launch in **background mode**:
+
+- `confirm=True` returns **immediately** with the PID and job directory
+- The agent stays responsive and can answer questions, check other jobs, etc.
+- A wrapper script automatically creates `RELION_JOB_EXIT_SUCCESS` or `_FAILURE` markers
+- Use `relion_job_status` and `relion_job_logs` to monitor progress
+
+Only `relion_import` (instant) and `relion_run_command` (escape hatch) run synchronously.
+
+### 3. Live Flag Discovery
+
+`relion_help` runs any `relion_* --help` in real time and returns parsed flags with descriptions and defaults. Supports keyword filtering (e.g. `search="gpu"`).
 
 ## Architecture
 
@@ -39,11 +57,12 @@ AI Agent (Claude Code / OpenClaw / NemoClaw)
     │
     │  stdio or HTTP
     ▼
-RELION MCP Server v2.0 (Python)
+RELION MCP Server v2.1 (Python)
     │
-    │  subprocess calls
-    ▼
-RELION 5.x binaries (relion_refine, relion_autopick, etc.)
+    │  Popen (detached)        subprocess.run (short jobs)
+    ▼                          ▼
+RELION 5.x binaries        relion_import, relion_help
+(background, non-blocking)  (synchronous, fast)
 ```
 
 ## Tools
@@ -67,15 +86,17 @@ RELION 5.x binaries (relion_refine, relion_autopick, etc.)
 | `relion_bayesian_polishing` | `relion_motion_refine` | Per-particle Bayesian polishing **NEW** |
 | `relion_blush` | `relion_python_blush` | AI map denoising (RELION 5) |
 
-### Read-Only Tools (5 tools — no confirm needed)
+### Read-Only Tools (7 tools — no confirm needed)
 
 | Tool | Description |
 |------|-------------|
 | `relion_project_info` | Project overview: jobs, counts, status |
 | `relion_read_star` | Parse STAR files (RELION's metadata format) |
-| `relion_job_status` | Check if a job is running/completed/failed |
+| `relion_job_status` | Check job status: SUCCESS/FAILURE/RUNNING + PID detection + stderr tail |
+| `relion_job_logs` | **NEW** Read stdout/stderr logs from background jobs (with tail) |
 | `relion_suggest_next_step` | Recommend next pipeline step (13-step pipeline) |
-| `relion_run_command` | Run any `relion_*` binary with custom args (escape hatch) |
+| `relion_run_command` | Run any `relion_*` binary with custom args (escape hatch, synchronous) |
+| `relion_help` | **NEW** Run `relion_* --help` and return parsed flags, descriptions & defaults. Supports keyword filtering. |
 
 ## Tutorial Defaults (EMPIAR-10204)
 
@@ -230,17 +251,24 @@ This server is designed for **MCP SDK 1.26+** with the following constraints:
 
 ## Known Limitations
 
-- **No GPU support in tools**: GPU device selection is not exposed (RELION uses `--gpu` flag). Use `relion_run_command` with `--gpu 0` for GPU jobs.
-- **Long-running jobs**: Classification and refinement can take hours/days on CPU. The server waits for completion (timeout up to 7 days).
+- **No GPU support in tools**: GPU device selection is not exposed (RELION uses `--gpu` flag). Use `relion_run_command` with `--gpu 0` for GPU jobs, or use `relion_help(program="relion_refine", search="gpu")` to discover GPU flags.
 
 ## Changelog
 
-### v2.0 (current)
+### v2.1 (current)
+- **Background execution**: all long-running jobs now launch via `Popen(start_new_session=True)` and return immediately with PID. No more agent blocking.
+- **`relion_job_logs`**: new tool to read stdout/stderr from background jobs in real time
+- **`relion_job_status` enhanced**: detects if PID is alive, shows stderr tail on failure, distinguishes RUNNING vs IDLE (crashed)
+- **`relion_help`**: new tool to run `relion_* --help` and parse all flags live, with keyword filtering
+- Wrapper script (`run.sh`) in each job_dir auto-creates SUCCESS/FAILURE markers
+- 21 tools total (7 read-only + 14 pipeline)
+
+### v2.0
 - **Preview/confirm system** on all 14 pipeline tools
-- **4 new tools**: `relion_initial_model`, `relion_mask_create`, `relion_ctf_refine`, `relion_bayesian_polishing`
+- **5 new tools**: `relion_initial_model`, `relion_mask_create`, `relion_ctf_refine`, `relion_bayesian_polishing`, `relion_help`
 - **Parameters added**: bfactor, gain_rot/flip, float16, save_ps, d_ast, phase shift, invert_contrast, white/black dust, --ctf flag, center_classes, healpix_order, skip_gridding, ref_correct_greyscale, MPI validation, autob_lowres/highres, mtf_angpix, skip_fsc_weighting
 - **Tutorial defaults** from EMPIAR-10204 (beta-galactosidase) baked in
-- 19 tools total (was 15)
+- 20 tools total (was 15)
 
 ### v1.0
 - Initial release with 15 tools
