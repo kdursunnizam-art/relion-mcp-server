@@ -144,11 +144,11 @@ claude mcp add-json relion '{"command":"python3","args":["/path/to/relion-mcp-se
 ```
 Verify it's registered:
 ```bash
-bashclaude mcp list
+claude mcp list
 ```
 To remove and reconfigure:
 ```bash
-bashclaude mcp remove relion
+claude mcp remove relion
 ```
 Note: --scope user makes the server available in all your projects.
 The command automatically writes to the correct config file — no need to
