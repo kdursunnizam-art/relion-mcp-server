@@ -139,14 +139,17 @@ cd ~/relion-mcp-server
 ### With Claude Code (recommended for local use)
 
 From your terminal, run this command:
-bashclaude mcp add-json relion '{"command":"python3","args":["/path/to/relion-mcp-server/relion_mcp.py"],"env":{"RELION_PROJECT_DIR":"/path/to/data/relion_tutorial"}}' --scope user
-
+```bash
+claude mcp add-json relion '{"command":"python3","args":["/path/to/relion-mcp-server/relion_mcp.py"],"env":{"RELION_PROJECT_DIR":"/path/to/data/relion_tutorial"}}' --scope user
+```
 Verify it's registered:
+```bash
 bashclaude mcp list
-
+```
 To remove and reconfigure:
+```bash
 bashclaude mcp remove relion
-
+```
 Note: --scope user makes the server available in all your projects.
 The command automatically writes to the correct config file — no need to
 find or edit ~/.claude.json manually.
