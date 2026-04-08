@@ -1,6 +1,6 @@
-# RELION MCP Server
+# RELION MCP Server v2.0
 
-An MCP (Model Context Protocol) server that lets AI agents drive [RELION 5.x](https://github.com/3dem/relion) — the gold-standard software for cryo-EM structure determination.
+An MCP (Model Context Protocol) server that lets AI agents drive [RELION 5.x](https://github.com/3dem/relion) the gold-standard software for cryo-EM structure determination.
 
 > **Tested and verified** against RELION 5.0.1 on Ubuntu 24.04 (WSL2). All CLI flags validated against actual `--help` output.
 
@@ -10,10 +10,27 @@ An AI agent (Claude Code, OpenClaw, NemoClaw, etc.) can process cryo-EM data thr
 
 ```
 You: "Import the movies from Movies/*.tiff, 200 kV, pixel size 0.885 Å, then run motion correction"
-Agent: → relion_import(...) → relion_motioncorr(...) → Done!
+Agent: → relion_import(..., confirm=False)  → shows parameter preview
+You: "Looks good, launch it"
+Agent: → relion_import(..., confirm=True)   → job runs
+       → relion_motioncorr(..., confirm=False) → preview
+       ...
 ```
 
-The server exposes **15 tools** covering the complete single-particle analysis pipeline.
+The server exposes **19 tools** covering the complete single-particle analysis pipeline, from import to Bayesian polishing.
+
+## Key Feature: Preview Before Launch
+
+Every pipeline tool uses a **preview/confirm** system to prevent costly mistakes:
+
+- **`confirm=False`** (default) — the tool does **not** launch the job. Instead it returns a full parameter list:
+  - ✏️ **défini** — value provided by the user
+  - 📋 **tutorial** — RELION 5 tutorial default (EMPIAR-10204, beta-galactosidase)
+  - ❌ **requis** — required parameter still missing
+  - ⬜ **optionnel** — optional, not set
+- **`confirm=True`** — the tool executes the job with all parameters
+
+This gives the user (or the supervising human) a chance to review every parameter before committing hours of compute.
 
 ## Architecture
 
@@ -22,7 +39,7 @@ AI Agent (Claude Code / OpenClaw / NemoClaw)
     │
     │  stdio or HTTP
     ▼
-RELION MCP Server (Python)
+RELION MCP Server v2.0 (Python)
     │
     │  subprocess calls
     ▼
@@ -31,7 +48,8 @@ RELION 5.x binaries (relion_refine, relion_autopick, etc.)
 
 ## Tools
 
-### Pipeline (10 tools)
+### Pipeline Tools (14 tools — all with preview/confirm)
+
 | Tool | RELION Binary | Description |
 |------|--------------|-------------|
 | `relion_import` | `relion_import` | Import movies/micrographs |
@@ -40,32 +58,53 @@ RELION 5.x binaries (relion_refine, relion_autopick, etc.)
 | `relion_autopick` | `relion_autopick` | Particle picking (LoG or template) |
 | `relion_extract` | `relion_preprocess` | Particle extraction |
 | `relion_class2d` | `relion_refine` | 2D classification |
+| `relion_initial_model` | `relion_refine --denovo_3dref` | Ab-initio 3D model (VDAM) **NEW** |
 | `relion_class3d` | `relion_refine` | 3D classification |
 | `relion_refine3d` | `relion_refine` | 3D auto-refinement |
+| `relion_mask_create` | `relion_mask_create` | Solvent mask creation **NEW** |
 | `relion_postprocess` | `relion_postprocess` | Map sharpening & resolution |
+| `relion_ctf_refine` | `relion_ctf_refine` | Per-particle CTF refinement **NEW** |
+| `relion_bayesian_polishing` | `relion_motion_refine` | Per-particle Bayesian polishing **NEW** |
 | `relion_blush` | `relion_python_blush` | AI map denoising (RELION 5) |
 
-### Monitoring (3 tools)
+### Read-Only Tools (5 tools — no confirm needed)
+
 | Tool | Description |
 |------|-------------|
 | `relion_project_info` | Project overview: jobs, counts, status |
 | `relion_read_star` | Parse STAR files (RELION's metadata format) |
 | `relion_job_status` | Check if a job is running/completed/failed |
+| `relion_suggest_next_step` | Recommend next pipeline step (13-step pipeline) |
+| `relion_run_command` | Run any `relion_*` binary with custom args (escape hatch) |
 
-### Advanced (2 tools)
-| Tool | Description |
+## Tutorial Defaults (EMPIAR-10204)
+
+All pipeline tools ship with defaults matching the RELION 5 beta-galactosidase tutorial:
+
+| Step | Key defaults |
 |------|-------------|
-| `relion_run_command` | Run any `relion_*` binary with custom args |
-| `relion_suggest_next_step` | Recommend next pipeline step |
+| Import | 200 kV, 0.885 Å, Cs 1.4, Q0 0.1 |
+| MotionCorr | dose 1.277 e⁻/Å²/frame, patches 5×5, bfactor 150, float16 |
+| CTF | Box 512, ResMin 30 Å, ResMax 5 Å, dF 5000–50000 Å, dAst 100 |
+| AutoPick | LoG, diam 150–180 Å |
+| Extract | box 256 → rescale 64, invert contrast, bg_radius 200 |
+| Class2D | K=50, iter 25, T=2, mask 200 Å, CTF on |
+| Class3D | K=4, iter 25, T=4, C1, ini_high 50 Å |
+| Refine3D | D2, ini_high 50 Å, MPI=3 (odd ≥ 3 validated) |
+| Mask | lowpass 15 Å, threshold 0.005, soft edge 6 px |
+| PostProcess | auto B-factor, autob_lowres 10 Å |
 
 ## Prerequisites
 
 - **RELION 5.x** compiled and in `PATH`
 - **Python ≥ 3.10**
-- **MCP Python SDK**: `pip install mcp pydantic`
-- mcp>=1.0.0
-- pydantic>=2.0.0
-- uvicorn>=0.30.0
+- **MCP Python SDK**:
+  ```bash
+  pip install mcp pydantic
+  ```
+  - mcp >= 1.0.0
+  - pydantic >= 2.0.0
+  - uvicorn >= 0.30.0 (for HTTP mode)
 
 ## Installation
 
@@ -98,8 +137,9 @@ Then in Claude Code:
 ```
 > Use relion_project_info to show the project status
 > Import movies from Movies/*.tiff with pixel size 0.885, 200 kV, Cs 1.4
-> Run motion correction with dose 1.0 e-/A²/frame and gain ref Movies/gain.mrc
-> etc...
+> Run motion correction with dose 1.277 e-/Å²/frame and gain ref Movies/gain.mrc
+> Show me the Class2D parameters before running (agent calls with confirm=False)
+> Change threads to 8 and launch (agent calls with confirm=True)
 ```
 
 ### With OpenClaw / NemoClaw (remote access)
@@ -115,7 +155,7 @@ python relion_mcp.py --transport http --port 8000 --host 0.0.0.0
 
 Configure openclaw.json:
 
-```
+```json
 "skills": {
   "install": {
     "nodeManager": "npm"
@@ -137,10 +177,14 @@ Configure openclaw.json:
           {
             "name": "relion-http",
             "transport": "streamable-http",
-            "url": "http:////your.IP.adress:8000" (ex : "http://127.0.0.1:8000")
+            "url": "http://your.IP.address:8000"
           }
         ],
         "toolPrefix": true
+      }
+    }
+  }
+}
 ```
 
 ### WSL2 Setup (Windows)
@@ -174,11 +218,33 @@ Claude Code on Windows connects to the MCP server in WSL2 seamlessly via stdio.
 - No shell injection: uses `subprocess.run` without `shell=True`
 - File paths resolved relative to project directory
 - In HTTP mode, binds to `127.0.0.1` by default
+- Preview/confirm prevents accidental job launches
+
+## MCP SDK Compatibility
+
+This server is designed for **MCP SDK 1.26+** with the following constraints:
+- No `lifespan` (causes crash with MCP SDK 1.26)
+- No `ctx.report_progress` (causes crash with MCP SDK 1.26)
+- All tool functions are `async` without `Context` parameter
+- Passes `python3 -m py_compile` cleanly
 
 ## Known Limitations
 
 - **No GPU support in tools**: GPU device selection is not exposed (RELION uses `--gpu` flag). Use `relion_run_command` with `--gpu 0` for GPU jobs.
 - **Long-running jobs**: Classification and refinement can take hours/days on CPU. The server waits for completion (timeout up to 7 days).
+
+## Changelog
+
+### v2.0 (current)
+- **Preview/confirm system** on all 14 pipeline tools
+- **4 new tools**: `relion_initial_model`, `relion_mask_create`, `relion_ctf_refine`, `relion_bayesian_polishing`
+- **Parameters added**: bfactor, gain_rot/flip, float16, save_ps, d_ast, phase shift, invert_contrast, white/black dust, --ctf flag, center_classes, healpix_order, skip_gridding, ref_correct_greyscale, MPI validation, autob_lowres/highres, mtf_angpix, skip_fsc_weighting
+- **Tutorial defaults** from EMPIAR-10204 (beta-galactosidase) baked in
+- 19 tools total (was 15)
+
+### v1.0
+- Initial release with 15 tools
+- Verified against RELION 5.0.1
 
 ## Tested With
 
