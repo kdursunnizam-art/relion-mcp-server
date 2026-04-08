@@ -138,21 +138,18 @@ cd ~/relion-mcp-server
 
 ### With Claude Code (recommended for local use)
 
-Add to `~/.claude.json` under `"mcpServers"`:
+From your terminal, run this command:
+bashclaude mcp add-json relion '{"command":"python3","args":["/path/to/relion-mcp-server/relion_mcp.py"],"env":{"RELION_PROJECT_DIR":"/path/to/data/relion_tutorial"}}' --scope user
 
-```json
-{
-  "mcpServers": {
-    "relion": {
-      "command": "python3",
-      "args": ["/path/to/relion-mcp-server/relion_mcp.py"],
-      "env": {
-        "RELION_PROJECT_DIR": "/path/to/your/relion/project"
-      }
-    }
-  }
-}
-```
+Verify it's registered:
+bashclaude mcp list
+
+To remove and reconfigure:
+bashclaude mcp remove relion
+
+Note: --scope user makes the server available in all your projects.
+The command automatically writes to the correct config file — no need to
+find or edit ~/.claude.json manually.
 
 Then in Claude Code:
 ```
@@ -198,7 +195,7 @@ Configure openclaw.json:
           {
             "name": "relion-http",
             "transport": "streamable-http",
-            "url": "http://your.IP.address:8000"
+            "url": "http://127.0.0.1:8000"
           }
         ],
         "toolPrefix": true
