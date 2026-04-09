@@ -61,24 +61,24 @@ RELION 5.x binaries        relion_import, relion_help
 
 ### Pipeline Tools (16 tools — all with preview/confirm)
 
-| Tool | Binary | Key audit additions |
-|------|--------|-------------------|
-| `relion_import` | `relion_import` | +mtf, +beamtilt_x/y |
-| `relion_motioncorr` | `relion_run_motioncorr` | +preexposure, +eer_grouping, +defect_file |
-| `relion_ctffind` | `relion_run_ctffind` | +use_given_ps=True, +ctfWin, +use_noDW |
-| `relion_autopick` | `relion_autopick` | +LoG_invert, +LoG_maxres, fix upper_threshold=5 |
-| `relion_extract` | `relion_preprocess` | +reextract_data_star, +fom_threshold |
-| `relion_class2d` | `relion_refine` | +gpu, +VDAM, +pool, +preread, +strict_highres |
-| `relion_initial_model` | `relion_refine --denovo_3dref` | +gpu, +grad_write_iter, +tau, +apply_sym_later |
-| `relion_class3d` | `relion_refine` | +gpu, +blush, +fast_subsets, +skip_padding, +pool |
-| `relion_refine3d` | `relion_refine` | +gpu, +blush, +ctf, +solvent_fsc, +skip_padding |
-| `relion_mask_create` | `relion_mask_create` | fix threshold=0.01, extend=3, soft_edge=8, +threads |
-| `relion_postprocess` | `relion_postprocess` | ✅ Already complete |
-| `relion_ctf_refine` | `relion_ctf_refine` | +beamtilt, +fit_phase, +minres, fix defaults |
-| `relion_bayesian_polishing` | `relion_motion_refine` | Full rewrite: train/polish modes, sigma params |
-| `relion_blush` | `relion_python_blush` | Unchanged |
-| `relion_local_resolution` | `relion_postprocess --locres` | **NEW** |
-| `relion_modelangelo` | `relion_python_modelangelo` | **NEW** |
+| Tool | Binary |
+|------|--------|
+| `relion_import` | `relion_import` | 
+| `relion_motioncorr` | `relion_run_motioncorr` |
+| `relion_ctffind` | `relion_run_ctffind` |
+| `relion_autopick` | `relion_autopick` |
+| `relion_extract` | `relion_preprocess` |
+| `relion_class2d` | `relion_refine` |
+| `relion_initial_model` | `relion_refine --denovo_3dref` |
+| `relion_class3d` | `relion_refine` |
+| `relion_refine3d` | `relion_refine` |
+| `relion_mask_create` | `relion_mask_create` |
+| `relion_postprocess` | `relion_postprocess` | 
+| `relion_ctf_refine` | `relion_ctf_refine` | 
+| `relion_bayesian_polishing` | `relion_motion_refine` |
+| `relion_blush` | `relion_python_blush` |
+| `relion_local_resolution` | `relion_postprocess --locres` |
+| `relion_modelangelo` | `relion_python_modelangelo` |
 
 ### Read-Only Tools (7 tools)
 
