@@ -1,6 +1,6 @@
 # RELION MCP Server v2.1
 
-An MCP (Model Context Protocol) server that lets AI agents drive [RELION 5.x](https://github.com/3dem/relion) — the gold-standard software for cryo-EM structure determination.
+An MCP (Model Context Protocol) server that lets AI agents drive [RELION 5.x](https://github.com/3dem/relion) the gold-standard software for cryo-EM structure determination.
 
 > **Tested and verified** against RELION 5.0.1 on Ubuntu 24.04 (WSL2). All CLI flags validated against actual `--help` output.
 
@@ -20,35 +20,27 @@ Agent: → relion_motioncorr(..., confirm=True) → 🚀 Launched (PID 12345)
        → relion_job_status("MotionCorr/job001") → ✅ COMPLETED
 ```
 
-The server exposes **21 tools** covering the complete single-particle analysis pipeline, from import to Bayesian polishing.
+The server exposes **23 tools** covering the complete single-particle analysis pipeline.
 
 ## Key Features
 
 ### 1. Preview Before Launch
-
-Every pipeline tool uses a **preview/confirm** system to prevent costly mistakes:
-
-- **`confirm=False`** (default) — the tool does **not** launch the job. Instead it returns a full parameter list:
-  - ✏️ **défini** — value provided by the user
-  - 📋 **tutorial** — RELION 5 tutorial default (EMPIAR-10204, beta-galactosidase)
-  - ❌ **requis** — required parameter still missing
-  - ⬜ **optionnel** — optional, not set
-- **`confirm=True`** — the tool launches the job in background
+Every pipeline tool: `confirm=False` shows all parameters (✏️ user / 📋 tutorial default / ❌ missing / ⬜ optional), `confirm=True` launches the job.
 
 ### 2. Non-Blocking Background Execution
+All long-running jobs launch via detached `Popen` and return immediately with PID. Monitor with `relion_job_status` and `relion_job_logs`.
 
-All long-running jobs (MotionCorr, CTF, Class2D, Refine3D, etc.) launch in **background mode**:
+### 3. GPU Support
+Class2D, InitialModel, Class3D, and Refine3D all expose `--gpu` for GPU acceleration.
 
-- `confirm=True` returns **immediately** with the PID and job directory
-- The agent stays responsive and can answer questions, check other jobs, etc.
-- A wrapper script automatically creates `RELION_JOB_EXIT_SUCCESS` or `_FAILURE` markers
-- Use `relion_job_status` and `relion_job_logs` to monitor progress
+### 4. Blush Regularisation
+RELION 5's neural-network prior is available on Class3D and Refine3D via `use_blush=True`.
 
-Only `relion_import` (instant) and `relion_run_command` (escape hatch) run synchronously.
+### 5. VDAM Algorithm
+Class2D and InitialModel support the VDAM gradient algorithm via `use_vdam=True`, with MPI=1 validation.
 
-### 3. Live Flag Discovery
-
-`relion_help` runs any `relion_* --help` in real time and returns parsed flags with descriptions and defaults. Supports keyword filtering (e.g. `search="gpu"`).
+### 6. Live Flag Discovery
+`relion_help` runs `relion_* --help` in real time with keyword filtering.
 
 ## Architecture
 
@@ -67,53 +59,58 @@ RELION 5.x binaries        relion_import, relion_help
 
 ## Tools
 
-### Pipeline Tools (14 tools — all with preview/confirm)
+### Pipeline Tools (16 tools — all with preview/confirm)
 
-| Tool | RELION Binary | Description |
-|------|--------------|-------------|
-| `relion_import` | `relion_import` | Import movies/micrographs |
-| `relion_motioncorr` | `relion_run_motioncorr` | Beam-induced motion correction |
-| `relion_ctffind` | `relion_run_ctffind` | CTF estimation (via CTFFIND4) |
-| `relion_autopick` | `relion_autopick` | Particle picking (LoG or template) |
-| `relion_extract` | `relion_preprocess` | Particle extraction |
-| `relion_class2d` | `relion_refine` | 2D classification |
-| `relion_initial_model` | `relion_refine --denovo_3dref` | Ab-initio 3D model (VDAM) **NEW** |
-| `relion_class3d` | `relion_refine` | 3D classification |
-| `relion_refine3d` | `relion_refine` | 3D auto-refinement |
-| `relion_mask_create` | `relion_mask_create` | Solvent mask creation **NEW** |
-| `relion_postprocess` | `relion_postprocess` | Map sharpening & resolution |
-| `relion_ctf_refine` | `relion_ctf_refine` | Per-particle CTF refinement **NEW** |
-| `relion_bayesian_polishing` | `relion_motion_refine` | Per-particle Bayesian polishing **NEW** |
-| `relion_blush` | `relion_python_blush` | AI map denoising (RELION 5) |
+| Tool | Binary | Key audit additions |
+|------|--------|-------------------|
+| `relion_import` | `relion_import` | +mtf, +beamtilt_x/y |
+| `relion_motioncorr` | `relion_run_motioncorr` | +preexposure, +eer_grouping, +defect_file |
+| `relion_ctffind` | `relion_run_ctffind` | +use_given_ps=True, +ctfWin, +use_noDW |
+| `relion_autopick` | `relion_autopick` | +LoG_invert, +LoG_maxres, fix upper_threshold=5 |
+| `relion_extract` | `relion_preprocess` | +reextract_data_star, +fom_threshold |
+| `relion_class2d` | `relion_refine` | +gpu, +VDAM, +pool, +preread, +strict_highres |
+| `relion_initial_model` | `relion_refine --denovo_3dref` | +gpu, +grad_write_iter, +tau, +apply_sym_later |
+| `relion_class3d` | `relion_refine` | +gpu, +blush, +fast_subsets, +skip_padding, +pool |
+| `relion_refine3d` | `relion_refine` | +gpu, +blush, +ctf, +solvent_fsc, +skip_padding |
+| `relion_mask_create` | `relion_mask_create` | fix threshold=0.01, extend=3, soft_edge=8, +threads |
+| `relion_postprocess` | `relion_postprocess` | ✅ Already complete |
+| `relion_ctf_refine` | `relion_ctf_refine` | +beamtilt, +fit_phase, +minres, fix defaults |
+| `relion_bayesian_polishing` | `relion_motion_refine` | Full rewrite: train/polish modes, sigma params |
+| `relion_blush` | `relion_python_blush` | Unchanged |
+| `relion_local_resolution` | `relion_postprocess --locres` | **NEW** |
+| `relion_modelangelo` | `relion_python_modelangelo` | **NEW** |
 
-### Read-Only Tools (7 tools — no confirm needed)
+### Read-Only Tools (7 tools)
 
 | Tool | Description |
 |------|-------------|
-| `relion_project_info` | Project overview: jobs, counts, status |
-| `relion_read_star` | Parse STAR files (RELION's metadata format) |
-| `relion_job_status` | Check job status: SUCCESS/FAILURE/RUNNING + PID detection + stderr tail |
-| `relion_job_logs` | **NEW** Read stdout/stderr logs from background jobs (with tail) |
-| `relion_suggest_next_step` | Recommend next pipeline step (13-step pipeline) |
-| `relion_run_command` | Run any `relion_*` binary with custom args (escape hatch, synchronous) |
-| `relion_help` | **NEW** Run `relion_* --help` and return parsed flags, descriptions & defaults. Supports keyword filtering. |
+| `relion_project_info` | Project overview |
+| `relion_read_star` | Parse STAR files |
+| `relion_job_status` | Job status + PID detection + stderr tail |
+| `relion_job_logs` | Read stdout/stderr from background jobs |
+| `relion_suggest_next_step` | Recommend next step (14-step pipeline) |
+| `relion_run_command` | Run any `relion_*` binary (escape hatch) |
+| `relion_help` | Parse `--help` output from any RELION binary |
 
 ## Tutorial Defaults (EMPIAR-10204)
 
-All pipeline tools ship with defaults matching the RELION 5 beta-galactosidase tutorial:
+All defaults match the RELION 5 beta-galactosidase tutorial:
 
 | Step | Key defaults |
 |------|-------------|
 | Import | 200 kV, 0.885 Å, Cs 1.4, Q0 0.1 |
-| MotionCorr | dose 1.277 e⁻/Å²/frame, patches 5×5, bfactor 150, float16 |
-| CTF | Box 512, ResMin 30 Å, ResMax 5 Å, dF 5000–50000 Å, dAst 100 |
-| AutoPick | LoG, diam 150–180 Å |
-| Extract | box 256 → rescale 64, invert contrast, bg_radius 200 |
-| Class2D | K=50, iter 25, T=2, mask 200 Å, CTF on |
-| Class3D | K=4, iter 25, T=4, C1, ini_high 50 Å |
-| Refine3D | D2, ini_high 50 Å, MPI=3 (odd ≥ 3 validated) |
-| Mask | lowpass 15 Å, threshold 0.005, soft edge 6 px |
-| PostProcess | auto B-factor, autob_lowres 10 Å |
+| MotionCorr | dose 1.277, patches 5×5, bfactor 150, float16, save_ps |
+| CTF | Box 512, 30-5 Å, dF 5000-50000, dAst 100, **use_given_ps=True** |
+| AutoPick | LoG, 150-180 Å, **upper_threshold=5**, maxres=20 |
+| Extract | box 256 → 64, invert, bg_radius 200 |
+| Class2D | K=50, T=2, mask 200, CTF, center |
+| InitialModel | VDAM 100 mini-batches, T=4, C1 + apply_sym_later |
+| Class3D | K=4, T=4, C1, ini_high 50, healpix 2 |
+| Refine3D | D2, ini_high 50, MPI=3 (odd≥3), pool 30 |
+| Mask | lowpass 15, **threshold 0.01, extend 3, soft_edge 8** |
+| PostProcess | auto B-factor, autob_lowres 10 |
+| CTF Refine | All flags off by default (multi-pass workflow) |
+| Polishing | Train/Polish modes, sigma vel/div/acc, float16 |
 
 ## Prerequisites
 
@@ -151,8 +148,6 @@ To remove and reconfigure:
 claude mcp remove relion
 ```
 Note: --scope user makes the server available in all your projects.
-The command automatically writes to the correct config file — no need to
-find or edit ~/.claude.json manually.
 
 Then in Claude Code:
 ```
@@ -208,21 +203,6 @@ Configure openclaw.json:
 }
 ```
 
-### WSL2 Setup (Windows)
-
-This server works great in WSL2 with RELION compiled in CPU-only mode:
-
-```bash
-# In WSL2 Ubuntu
-cmake -DCUDA=OFF -DCMAKE_INSTALL_PREFIX=$HOME/relion-install ..
-make -j4 && make install
-
-# Start Claude Code
-cd /your/relion/project
-claude
-```
-
-Claude Code on Windows connects to the MCP server in WSL2 seamlessly via stdio.
 
 ## Configuration
 
@@ -249,13 +229,22 @@ This server is designed for **MCP SDK 1.26+** with the following constraints:
 - All tool functions are `async` without `Context` parameter
 - Passes `python3 -m py_compile` cleanly
 
-## Known Limitations
-
-- **No GPU support in tools**: GPU device selection is not exposed (RELION uses `--gpu` flag). Use `relion_run_command` with `--gpu 0` for GPU jobs, or use `relion_help(program="relion_refine", search="gpu")` to discover GPU flags.
 
 ## Changelog
 
-### v2.1 (current)
+### v3.0 (current)
+- 68 missing params added, 11 defaults fixed, 3 MPI validations
+- **GPU support** (`--gpu`) on Class2D, InitialModel, Class3D, Refine3D
+- **Blush** on Class3D, Refine3D
+- **VDAM** on Class2D, InitialModel (with MPI=1 validation)
+- **Polishing fully rewritten**: train/polish modes, sigma params, opt_params
+- **Compute params** factored: `--pool`, `--preread_images`, `--scratch_dir`, `--skip_padding`
+- **2 new tools**: `relion_local_resolution`, `relion_modelangelo`
+- **CTF Refine** fixed: +beamtilt, +fit_phase, +minres, defaults all False
+- **Mask Create** defaults fixed to match tutorial
+- 23 tools total
+
+### v2.1
 - **Background execution**: all long-running jobs now launch via `Popen(start_new_session=True)` and return immediately with PID. No more agent blocking.
 - **`relion_job_logs`**: new tool to read stdout/stderr from background jobs in real time
 - **`relion_job_status` enhanced**: detects if PID is alive, shows stderr tail on failure, distinguishes RUNNING vs IDLE (crashed)
@@ -268,7 +257,7 @@ This server is designed for **MCP SDK 1.26+** with the following constraints:
 - **5 new tools**: `relion_initial_model`, `relion_mask_create`, `relion_ctf_refine`, `relion_bayesian_polishing`, `relion_help`
 - **Parameters added**: bfactor, gain_rot/flip, float16, save_ps, d_ast, phase shift, invert_contrast, white/black dust, --ctf flag, center_classes, healpix_order, skip_gridding, ref_correct_greyscale, MPI validation, autob_lowres/highres, mtf_angpix, skip_fsc_weighting
 - **Tutorial defaults** from EMPIAR-10204 (beta-galactosidase) baked in
-- 20 tools total (was 15)
+- 20 tools total
 
 ### v1.0
 - Initial release with 15 tools
