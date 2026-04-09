@@ -1,4 +1,4 @@
-# RELION MCP Server v2.1
+# RELION MCP Server v3
 
 An MCP (Model Context Protocol) server that lets AI agents drive [RELION 5.x](https://github.com/3dem/relion) the gold-standard software for cryo-EM structure determination.
 
