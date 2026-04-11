@@ -262,7 +262,7 @@ or Configure manually openclaw.json both stdio et http:
 - Only `relion_*` executables can be run (validated)
 - No shell injection: uses `subprocess.run` without `shell=True`
 - File paths resolved relative to project directory
-- In HTTP mode, binds to `127.0.0.1` by default
+- In HTTP mode, the server binds to 127.0.0.1 by default. It is preferable to change --host 0.0.0.0 to your own IP address 
 - Preview/confirm prevents accidental job launches
 
 ## MCP SDK Compatibility
