@@ -158,21 +158,21 @@ Note: --scope user makes the server available in all your projects.
 cd /path/to/relion-mcp-server
 source venv/bin/activate
 export RELION_PROJECT_DIR=/path/to/data/relion_tutorial
-python relion_mcp.py --transport streamable-http --port 8000
+python relion_mcp.py --transport streamable-http --port 8000 --host 0.0.0.0
 ```
-Keep this terminal open. The server listens on http://localhost:8000/mcp.
+Keep this terminal open. 
 
 2. Add the server to Claude Desktop
 
 ```bash
-claude mcp add --transport http relion http://localhost:8000/mcp --scope user
+claude mcp add --transport http relion http://YOUR.IP.ADRESS:8000/mcp --scope user
 ```
 3. Verify
 
 ```bash
 claude mcp list
 ```
-Should show relion with transport streamable-http and URL http://localhost:8000/mcp.
+Should show relion with transport streamable-http and URL http://127.0.0.1:8000/mcp.
 
 4. Restart Claude Desktop and test.
 
@@ -185,7 +185,7 @@ Then in Claude Code:
 > Change threads to 8 and launch (agent calls with confirm=True)
 ```
 
-### With OpenClaw / NemoClaw 
+### With OpenClaw / NemoClaw / HERMES Agent etc...
 
 #### For stdio (local use)
 From your terminal, run this command:
@@ -205,15 +205,15 @@ Start the server in HTTP mode:
 cd /path/to/relion_mcp.py/
 source venv/bin/activate
 export RELION_PROJECT_DIR=/data/my_project
-python relion_mcp.py --transport http --port 8000 --host 0.0.0.0
+python relion_mcp.py --transport streamable-http --port 8000 --host 0.0.0.0
 ```
 
 Configure using openclaw mcp command
 
 ```bash
-openclaw mcp add --transport http --scope user relion http://127.0.0.1:8000/mcp
+openclaw mcp add --transport http --scope user relion http://YOUR.IP.ADRESS:8000/mcp
 ```
-or Configure manually openclaw.json:
+or Configure manually openclaw.json both stdio et http:
 
 ```json
 "skills": {
@@ -229,15 +229,15 @@ or Configure manually openclaw.json:
             "name": "relion-stdio",
             "transport": "stdio",
             "command": "python3",
-            "args": ["/chemin/vers/relion-mcp-server/relion_mcp.py"],
+            "args": ["/path/to/relion-mcp-server/relion_mcp.py"],
             "env": {
-              "RELION_PROJECT_DIR": "/chemin/vers/votre/projet_relion"
+              "RELION_PROJECT_DIR": "/path/to/data/projet_relion"
             }
           },
           {
             "name": "relion-http",
             "transport": "streamable-http",
-            "url": "http://127.0.0.1:8000"
+            "url": "http://YOUR.IP.ADRESS:8000"
           }
         ],
         "toolPrefix": true
