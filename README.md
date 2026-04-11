@@ -133,8 +133,9 @@ cd ~/relion-mcp-server
 
 ## Usage
 
-### With Claude Code (recommended for local use)
+### With Claude Code (using claude mcp command, no claude.json manual configuration)
 
+#### For stdio (local use)
 From your terminal, run this command:
 ```bash
 claude mcp add-json relion '{"command":"python3","args":["/path/to/relion-mcp-server/relion_mcp.py"],"env":{"RELION_PROJECT_DIR":"/path/to/data/relion_tutorial"}}' --scope user
@@ -149,6 +150,32 @@ claude mcp remove relion
 ```
 Note: --scope user makes the server available in all your projects.
 
+#### For http use (remote)
+
+1. Start the server manually in a terminal
+
+```bash
+cd /path/to/relion-mcp-server
+source venv/bin/activate
+export RELION_PROJECT_DIR=/path/to/data/relion_tutorial
+python relion_mcp.py --transport streamable-http --port 8000
+```
+Keep this terminal open. The server listens on http://localhost:8000/mcp.
+
+2. Add the server to Claude Desktop
+
+```bash
+claude mcp add --transport http relion http://localhost:8000/mcp --scope user
+```
+3. Verify
+
+```bash
+claude mcp list
+```
+Should show relion with transport streamable-http and URL http://localhost:8000/mcp.
+
+4. Restart Claude Desktop and test.
+
 Then in Claude Code:
 ```
 > Use relion_project_info to show the project status
@@ -158,7 +185,19 @@ Then in Claude Code:
 > Change threads to 8 and launch (agent calls with confirm=True)
 ```
 
-### With OpenClaw / NemoClaw (remote access)
+### With OpenClaw / NemoClaw 
+
+#### For stdio (local use)
+From your terminal, run this command:
+```bash
+openclaw mcp add --transport stdio --scope user relion --cmd python3 --args "/path/to/relion-mcp-server/relion_mcp.py" --env RELION_PROJECT_DIR="/path/to/data/relion_tutorial"
+```
+
+Verify it's registered:
+```bash
+openclaw mcp list
+```
+#### For http (remote use)
 
 Start the server in HTTP mode:
 
@@ -169,7 +208,12 @@ export RELION_PROJECT_DIR=/data/my_project
 python relion_mcp.py --transport http --port 8000 --host 0.0.0.0
 ```
 
-Configure openclaw.json:
+Configure using openclaw mcp command
+
+```bash
+openclaw mcp add --transport http --scope user relion http://127.0.0.1:8000/mcp
+```
+or Configure manually openclaw.json:
 
 ```json
 "skills": {
