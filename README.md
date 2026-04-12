@@ -150,7 +150,7 @@ claude mcp remove relion
 ```
 Note: --scope user makes the server available in all your projects.
 
-#### For http use (remote)
+#### For http use (remote) EXPERIMENTAL
 
 1. Start the server manually in a terminal
 
