@@ -185,7 +185,7 @@ Then in Claude Code:
 > Change threads to 8 and launch (agent calls with confirm=True)
 ```
 
-### With OpenClaw / NemoClaw / HERMES Agent etc...
+### With OpenClaw and Claude Desktop
 
 #### For stdio (local use)
 From your terminal, run this command:
@@ -197,6 +197,27 @@ Verify it's registered:
 ```bash
 openclaw mcp list
 ```
+or edit manually claude_desktop_config.json (mandatory for Claude Dektop and only in stdio)
+
+claude_desktop_config.json
+Windows : %APPDATA%\Claude\claude_desktop_config.json
+macOS : ~/Library/Application Support/Claude/claude_desktop_config.json
+```json
+{
+  "mcpServers": {
+    "relion": {
+      "command": "python3",
+      "args": ["/path/to/relion-mcp-server/relion_mcp.py"],
+      "env": {
+        "RELION_PROJECT_DIR": "/path/to/data/projet_relion",
+        "RELION_THREADS": "4",
+        "RELION_MPI": "1"
+      }
+    }
+  }
+}
+```
+
 #### For http (remote use)
 
 Start the server in HTTP mode:
@@ -213,8 +234,9 @@ Configure using openclaw mcp command
 ```bash
 openclaw mcp add --transport http --scope user relion http://YOUR.IP.ADRESS:8000/mcp
 ```
-or Configure manually openclaw.json both stdio et http:
+or Configure manually openclaw.json  both stdio et http:
 
+opencalw.json
 ```json
 "skills": {
   "install": {
