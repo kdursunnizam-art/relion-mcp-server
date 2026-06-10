@@ -1,6 +1,6 @@
 # RELION MCP Server v3
 
-An MCP (Model Context Protocol) server that lets AI agents drive [RELION 5.x](https://github.com/3dem/relion) the gold-standard software for cryo-EM structure determination.
+An MCP (Model Context Protocol) server that lets AI agents drive [RELION 5.x](https://github.com/3dem/relion) — the gold-standard software for cryo-EM structure determination.
 
 > **Tested and verified** against RELION 5.0.1 on Ubuntu 24.04 (WSL2). All CLI flags validated against actual `--help` output.
 
@@ -49,7 +49,7 @@ AI Agent (Claude Code / OpenClaw / NemoClaw)
     │
     │  stdio or HTTP
     ▼
-RELION MCP Server v2.1 (Python)
+RELION MCP Server v3 (Python)
     │
     │  Popen (detached)        subprocess.run (short jobs)
     ▼                          ▼
@@ -63,7 +63,7 @@ RELION 5.x binaries        relion_import, relion_help
 
 | Tool | Binary |
 |------|--------|
-| `relion_import` | `relion_import` | 
+| `relion_import` | `relion_import` |
 | `relion_motioncorr` | `relion_run_motioncorr` |
 | `relion_ctffind` | `relion_run_ctffind` |
 | `relion_autopick` | `relion_autopick` |
@@ -73,8 +73,8 @@ RELION 5.x binaries        relion_import, relion_help
 | `relion_class3d` | `relion_refine` |
 | `relion_refine3d` | `relion_refine` |
 | `relion_mask_create` | `relion_mask_create` |
-| `relion_postprocess` | `relion_postprocess` | 
-| `relion_ctf_refine` | `relion_ctf_refine` | 
+| `relion_postprocess` | `relion_postprocess` |
+| `relion_ctf_refine` | `relion_ctf_refine` |
 | `relion_bayesian_polishing` | `relion_motion_refine` |
 | `relion_blush` | `relion_python_blush` |
 | `relion_local_resolution` | `relion_postprocess --locres` |
@@ -116,9 +116,9 @@ All defaults match the RELION 5 beta-galactosidase tutorial:
 
 - **RELION 5.x** compiled and in `PATH`
 - **Python ≥ 3.10**
-- **MCP Python SDK**:
+- **MCP Python SDK** and dependencies (see `requirements.txt`):
   ```bash
-  pip install mcp pydantic
+  pip install -r requirements.txt
   ```
   - mcp >= 1.0.0
   - pydantic >= 2.0.0
@@ -128,53 +128,59 @@ All defaults match the RELION 5 beta-galactosidase tutorial:
 
 ```bash
 git clone https://github.com/kdursunnizam-art/relion-mcp-server.git
-cd ~/relion-mcp-server
+cd relion-mcp-server
+pip install -r requirements.txt
+```
+
+Optionally, use a virtual environment (recommended for HTTP mode):
+
+```bash
+cd relion-mcp-server
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ## Usage
 
-### With Claude Code (using claude mcp command, no claude.json manual configuration)
+### With Claude Code (recommended for local use)
 
-#### For stdio (local use)
-From your terminal, run this command:
+#### stdio (local)
+From your terminal:
 ```bash
 claude mcp add-json relion '{"command":"python3","args":["/path/to/relion-mcp-server/relion_mcp.py"],"env":{"RELION_PROJECT_DIR":"/path/to/data/relion_tutorial"}}' --scope user
 ```
-Verify it's registered:
+Verify:
 ```bash
 claude mcp list
 ```
-To remove and reconfigure:
+Remove / reconfigure:
 ```bash
 claude mcp remove relion
 ```
-Note: --scope user makes the server available in all your projects.
+Note: `--scope user` makes the server available in all your projects.
 
-#### For http use (remote) EXPERIMENTAL
+#### HTTP (remote) — EXPERIMENTAL
 
-1. Start the server manually in a terminal
-
+1. Start the server manually in a terminal:
 ```bash
 cd /path/to/relion-mcp-server
 source venv/bin/activate
 export RELION_PROJECT_DIR=/path/to/data/relion_tutorial
-python relion_mcp.py --transport streamable-http --port 8000 --host 0.0.0.0
+python relion_mcp.py --transport http --port 8000 --host 0.0.0.0
 ```
-Keep this terminal open. 
+Keep this terminal open.
 
-2. Add the server to Claude Desktop
-
+2. Register the running server with Claude Code:
 ```bash
-claude mcp add --transport http relion http://YOUR.IP.ADRESS:8000/mcp --scope user
+claude mcp add --transport http relion http://YOUR.IP.ADDRESS:8000/mcp --scope user
 ```
-3. Verify
 
+3. Verify:
 ```bash
 claude mcp list
 ```
-Should show relion with transport streamable-http and URL http://127.0.0.1:8000/mcp.
-
-4. Restart Claude Desktop and test.
+It should show `relion` with the HTTP transport and URL `http://YOUR.IP.ADDRESS:8000/mcp`.
 
 Then in Claude Code:
 ```
@@ -185,23 +191,12 @@ Then in Claude Code:
 > Change threads to 8 and launch (agent calls with confirm=True)
 ```
 
-### With OpenClaw and Claude Desktop
+### With Claude Desktop
 
-#### For stdio (local use)
-From your terminal, run this command:
-```bash
-openclaw mcp add --transport stdio --scope user relion --cmd python3 --args "/path/to/relion-mcp-server/relion_mcp.py" --env RELION_PROJECT_DIR="/path/to/data/relion_tutorial"
-```
+Claude Desktop only supports stdio servers via manual config. Edit `claude_desktop_config.json`:
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-Verify it's registered:
-```bash
-openclaw mcp list
-```
-or edit manually claude_desktop_config.json (mandatory for Claude Dektop and only in stdio)
-
-claude_desktop_config.json
-Windows : %APPDATA%\Claude\claude_desktop_config.json
-macOS : ~/Library/Application Support/Claude/claude_desktop_config.json
 ```json
 {
   "mcpServers": {
@@ -218,57 +213,74 @@ macOS : ~/Library/Application Support/Claude/claude_desktop_config.json
 }
 ```
 
-#### For http (remote use)
+On Windows with WSL2, set `"command": "wsl"` and prepend `python3` to `args`:
+```json
+{
+  "mcpServers": {
+    "relion": {
+      "command": "wsl",
+      "args": ["python3", "/home/you/relion-mcp-server/relion_mcp.py"],
+      "env": { "RELION_PROJECT_DIR": "/home/you/relion_tutorial" }
+    }
+  }
+}
+```
+Restart Claude Desktop after editing the config.
 
-Start the server in HTTP mode:
+### With OpenClaw / NemoClaw
 
+#### stdio (local)
 ```bash
-cd /path/to/relion_mcp.py/
+openclaw mcp add --transport stdio --scope user relion --cmd python3 --args "/path/to/relion-mcp-server/relion_mcp.py" --env RELION_PROJECT_DIR="/path/to/data/relion_tutorial"
+```
+Verify:
+```bash
+openclaw mcp list
+```
+
+#### HTTP (remote)
+Start the server:
+```bash
+cd /path/to/relion-mcp-server
 source venv/bin/activate
 export RELION_PROJECT_DIR=/data/my_project
-python relion_mcp.py --transport streamable-http --port 8000 --host 0.0.0.0
+python relion_mcp.py --transport http --port 8000 --host 0.0.0.0
 ```
-
-Configure using openclaw mcp command
-
+Register:
 ```bash
-openclaw mcp add --transport http --scope user relion http://YOUR.IP.ADRESS:8000/mcp
+openclaw mcp add --transport http --scope user relion http://YOUR.IP.ADDRESS:8000/mcp
 ```
-or Configure manually openclaw.json  both stdio et http:
 
-opencalw.json
+Or configure `openclaw.json` manually (both stdio and HTTP):
 ```json
-"skills": {
-  "install": {
-    "nodeManager": "npm"
-  },
-  "entries": {
-    "mcp-integration": {
-      "enabled": true,
-      "config": {
-        "servers": [
-          {
-            "name": "relion-stdio",
-            "transport": "stdio",
-            "command": "python3",
-            "args": ["/path/to/relion-mcp-server/relion_mcp.py"],
-            "env": {
-              "RELION_PROJECT_DIR": "/path/to/data/projet_relion"
+{
+  "skills": {
+    "install": { "nodeManager": "npm" },
+    "entries": {
+      "mcp-integration": {
+        "enabled": true,
+        "config": {
+          "servers": [
+            {
+              "name": "relion-stdio",
+              "transport": "stdio",
+              "command": "python3",
+              "args": ["/path/to/relion-mcp-server/relion_mcp.py"],
+              "env": { "RELION_PROJECT_DIR": "/path/to/data/projet_relion" }
+            },
+            {
+              "name": "relion-http",
+              "transport": "streamable-http",
+              "url": "http://YOUR.IP.ADDRESS:8000/mcp"
             }
-          },
-          {
-            "name": "relion-http",
-            "transport": "streamable-http",
-            "url": "http://YOUR.IP.ADRESS:8000"
-          }
-        ],
-        "toolPrefix": true
+          ],
+          "toolPrefix": true
+        }
       }
     }
   }
 }
 ```
-
 
 ## Configuration
 
@@ -279,26 +291,32 @@ opencalw.json
 | `RELION_THREADS` | Default thread count | 4 |
 | `RELION_MPI` | Default MPI processes | 1 |
 
+| CLI Flag | Description | Default |
+|----------|-------------|---------|
+| `--transport` | `stdio` or `http` | `stdio` |
+| `--port` | HTTP port | 8000 |
+| `--host` | HTTP host (use `0.0.0.0` for remote access) | 127.0.0.1 |
+| `--project-dir` | Override `RELION_PROJECT_DIR` | (env or cwd) |
+
 ## Security
 
 - Only `relion_*` executables can be run (validated)
-- No shell injection: uses `subprocess.run` without `shell=True`
-- File paths resolved relative to project directory
-- In HTTP mode, the server binds to 127.0.0.1 by default. It is preferable to change --host 0.0.0.0 to your own IP address 
+- No shell injection: subprocess calls do not use `shell=True`
+- File paths resolved relative to the project directory
+- In HTTP mode, the server binds to `127.0.0.1` by default. For remote access, set `--host 0.0.0.0` (or your specific IP). Be aware this exposes the server on your network — use only on trusted networks.
 - Preview/confirm prevents accidental job launches
 
 ## MCP SDK Compatibility
 
-This server is designed for **MCP SDK 1.26+** with the following constraints:
+Designed for **MCP SDK 1.26+** with these constraints:
 - No `lifespan` (causes crash with MCP SDK 1.26)
 - No `ctx.report_progress` (causes crash with MCP SDK 1.26)
-- All tool functions are `async` without `Context` parameter
+- All tool functions are `async` without a `Context` parameter
 - Passes `python3 -m py_compile` cleanly
-
 
 ## Changelog
 
-### v3.0 (current)
+### v3 (current)
 - 68 missing params added, 11 defaults fixed, 3 MPI validations
 - **GPU support** (`--gpu`) on Class2D, InitialModel, Class3D, Refine3D
 - **Blush** on Class3D, Refine3D
@@ -308,21 +326,22 @@ This server is designed for **MCP SDK 1.26+** with the following constraints:
 - **2 new tools**: `relion_local_resolution`, `relion_modelangelo`
 - **CTF Refine** fixed: +beamtilt, +fit_phase, +minres, defaults all False
 - **Mask Create** defaults fixed to match tutorial
+- **HTTP host/port** now correctly applied from CLI flags
 - 23 tools total
 
 ### v2.1
-- **Background execution**: all long-running jobs now launch via `Popen(start_new_session=True)` and return immediately with PID. No more agent blocking.
-- **`relion_job_logs`**: new tool to read stdout/stderr from background jobs in real time
-- **`relion_job_status` enhanced**: detects if PID is alive, shows stderr tail on failure, distinguishes RUNNING vs IDLE (crashed)
-- **`relion_help`**: new tool to run `relion_* --help` and parse all flags live, with keyword filtering
+- **Background execution**: long-running jobs launch via `Popen(start_new_session=True)` and return immediately with PID. No more agent blocking.
+- **`relion_job_logs`**: read stdout/stderr from background jobs in real time
+- **`relion_job_status` enhanced**: PID liveness detection, stderr tail on failure, RUNNING vs IDLE
+- **`relion_help`**: run `relion_* --help` and parse all flags live, with keyword filtering
 - Wrapper script (`run.sh`) in each job_dir auto-creates SUCCESS/FAILURE markers
-- 21 tools total (7 read-only + 14 pipeline)
+- 21 tools total
 
 ### v2.0
-- **Preview/confirm system** on all 14 pipeline tools
+- **Preview/confirm system** on all pipeline tools
 - **5 new tools**: `relion_initial_model`, `relion_mask_create`, `relion_ctf_refine`, `relion_bayesian_polishing`, `relion_help`
 - **Parameters added**: bfactor, gain_rot/flip, float16, save_ps, d_ast, phase shift, invert_contrast, white/black dust, --ctf flag, center_classes, healpix_order, skip_gridding, ref_correct_greyscale, MPI validation, autob_lowres/highres, mtf_angpix, skip_fsc_weighting
-- **Tutorial defaults** from EMPIAR-10204 (beta-galactosidase) baked in
+- **Tutorial defaults** from EMPIAR-10204 baked in
 - 20 tools total
 
 ### v1.0
@@ -335,7 +354,7 @@ This server is designed for **MCP SDK 1.26+** with the following constraints:
 - Ubuntu 24.04 LTS (WSL2)
 - Python 3.12, MCP SDK 1.26.0
 - Claude Code 2.1.89
-- Openclaw 2026.4.2 (commit d74a122)
+- OpenClaw 2026.4.2 (commit d74a122)
 - Tutorial dataset: beta-galactosidase (EMPIAR-10204)
 
 ## License

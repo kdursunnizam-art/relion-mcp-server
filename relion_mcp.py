@@ -1728,7 +1728,7 @@ def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="RELION MCP Server v3.0")
     parser.add_argument("--transport", choices=["stdio", "http"], default="stdio")
-    parser.add_argument("--port", type=int, default=8422)
+    parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--project-dir", default=None)
     args = parser.parse_args()
@@ -1736,6 +1736,11 @@ def main() -> None:
         global PROJECT_DIR
         PROJECT_DIR = args.project_dir
     if args.transport == "http":
+        # Apply host/port to the FastMCP settings BEFORE running.
+        # FastMCP reads these from its settings object, so passing them
+        # only to run() would be ignored.
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
         mcp.run(transport="streamable-http")
     else:
         mcp.run()
